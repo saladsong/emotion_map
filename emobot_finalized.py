@@ -10,6 +10,8 @@ import pyzbar.pyzbar as pyzbar
 import cognitive_face as CF
 import boto3
 
+from utils import *
+
 app = Flask(__name__)
 
 with app.app_context():
@@ -26,7 +28,7 @@ CF.BaseUrl.set(BASE_URL)
 ACCESS_KEY = ''  # Replace with your access KEY
 SECRET_KEY = ''  # Replace with your secret KEY
 
-
+## Upload EMOTION MAP IMG (generated via Unity program) to S3 server 
 def upload_mapfile(dir_name, file_name):
     s3_resource = boto3.resource( 
 				's3', 
@@ -45,14 +47,7 @@ def upload_mapfile(dir_name, file_name):
 
     return img_url
 
-
-def get_time():
-    secondsSinceEpoch = time.time()
-    timeObj = time.localtime(secondsSinceEpoch)
-    cur_time = str('%d-%d-%d %d:%d:%d' % (timeObj.tm_year, timeObj.tm_mon, timeObj.tm_mday, timeObj.tm_hour, timeObj.tm_min, timeObj.tm_sec))
-
-    return cur_time
-
+## Get INFO from user query (input)
 def get_info():
     req = request.get_json()
     usr_id = req["userRequest"]["user"]["properties"]["plusfriendUserKey"]
@@ -60,65 +55,35 @@ def get_info():
 
     return usr_id, cur_time
 
-def mk_directory(usr_id):
-    folder_path = "./usr_id_" + usr_id
-    try:
-        os.makedirs(folder_path + "/")
-    except:
-        pass
-
-    return folder_path
-
-def count_files(folder_path):
-    list = os.listdir(folder_path)
-    num_files = len(list)
-    return num_files
-
-
+## Get SELFIE IMG and preproc
 def get_pic(folder_path):
-    ## Retrieve the url to get the selfie sent
+    # Retrieve the url to get the selfie sent
     req = request.get_json()
     pic_url = req["action"]["detailParams"]["secureimage"]["value"]
     pic_url_d = ast.literal_eval(pic_url)
     pic_src = pic_url_d["secureUrls"][5:-1]
-    print(pic_src)
+    #print(pic_src)
 
-    ## Assign the directory & file name to the image
+    # Assign the directory & file name to the image
     num_files = count_files(folder_path)
     file_name = str(num_files + 1) + ".jpg"
     dir_name = os.path.join(folder_path, file_name)
-    print(dir_name)
+    #print(dir_name)
 
-    ## Save the image to the local
+    # Save the selfie image to the local
     urllib.urlretrieve(pic_src, dir_name)
 
-    ## Read the image via cv2 for QR decoding
+    # Read the image via cv2 for QR decoding
     im = cv2.imread(dir_name)
 
-    ## Read & Resize the image for face cognition
+    # Read & Resize the image for face cognition
     im_0 = Image.open(dir_name)
-    im_s = im_shrink(im_0)
+    im_s = img_shrink(im_0)
     im_s.save(dir_name)
 
     return im, dir_name
 
-def im_shrink(im):
-    wid, hei = im.size
-    wid_s = int(wid*0.5)
-    hei_s = int(hei*0.5)
-    print(wid_s, hei_s)
-
-    im_s = im.resize((wid_s, hei_s), Image.ANTIALIAS)
-    
-    return im_s
-
-def contrast_up(im):
-    # import matplotlib.pyplot as plt
-    im2 = cv2.cvtColor(im, cv2.COLOR_BGR2YUV)
-    im2[:, :, 0] = cv2.equalizeHist(im2[:, :, 0])
-
-    return im2
-
+## DETECT EMOTION ON FACE via CF API
 def cog_face(dir_name):
     try:
         emo = CF.face.detect(dir_name, face_id=False, landmarks=False, attributes='emotion')
@@ -130,7 +95,7 @@ def cog_face(dir_name):
 
     return emo_attr
 
-
+## QR code decoding for location inspection
 def decode(im):
     decoded0bj = pyzbar.decode(im, symbols=[pyzbar.ZBarSymbol.QRCODE])
     
@@ -144,22 +109,19 @@ def decode(im):
 
     return qr_data
 
+## Get SPOTNAME by QR data matching
 def get_spotname(qr_data):
     spot_dict = {"0": "알 수 없음", "1":"전시관", "2":"생명의 나무", "3":"굽은 소나무", "4":"백년된 나무", "5":"가을 단풍숲"}
     if qr_data != 0:
         spot_num = str(qr_data)[-1]
     else:
         spot_num = str(qr_data)
-    print('spot number is, ', spot_num)
+    #print('spot number is, ', spot_num)
     my_spot = spot_dict[spot_num]
 
     return my_spot
 
-    # def f1(x):
-    #    return emo_attr[x]
-    # max_emo = max(emo_attr.keys(), key=f1)
-    #    my_emo = "{} ({})".format(max_emo, emo_attr[max_emo])
-
+## Set RETURN MSG for user query
 def return_msg(usr_id, cur_time, qr_data, emo_attr):
     if emo_attr == 0:
         my_spot = get_spotname(qr_data)
@@ -174,9 +136,9 @@ def return_msg(usr_id, cur_time, qr_data, emo_attr):
 
     return answer
 
-
+## Set required infos on CSV to generate EMOTION MAP IMG (via Unity)
 def what_to_write(usr_id, qr_data, emo_attr):
-    csv_columns = ['id', 'loca', 'anger','contempt','disgust','fear','happiness','neutral','sadness','surprise']
+    csv_columns = ['id', 'loca', 'anger', 'contempt', 'disgust', 'fear', 'happiness', 'neutral', 'sadness', 'surprise']
     csv_data = []
     # if emo_attr == 0:
     #     emo_attr = {'anger': 0.0, 'contempt': 0.0, 'disgust': 0.0, 'fear': 0.0, 'happiness': 0.9, 'neutral': 0.1, 'sadness': 0.0, 'surprise': 0.0}
@@ -188,6 +150,7 @@ def what_to_write(usr_id, qr_data, emo_attr):
 
     return csv_columns, csv_data
 
+## Write the data to CSV
 def write_for_map(folder_path):
     csv_name = str(folder_path) + '/emo_qr.csv'
     file_exists = os.path.isfile(csv_name)
